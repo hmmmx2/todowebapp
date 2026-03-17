@@ -295,6 +295,7 @@ export default function DashboardPage() {
   const [loading,    setLoading]    = useState(true);
   const [saving,     setSaving]     = useState(false);
   const [saved,      setSaved]      = useState(false);
+  const [errorMsg,   setErrorMsg]   = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [filter,     setFilter]     = useState<"all" | "active" | "done">("all");
 
@@ -302,12 +303,40 @@ export default function DashboardPage() {
 
   async function fetchItems() {
     setLoading(true);
-    const res  = await fetch("/api/items");
-    const data = await res.json();
-    // Restore local done state from sessionStorage
-    const doneIds: string[] = JSON.parse(sessionStorage.getItem("done_ids") || "[]");
-    setItems(data.map((i: Item) => ({ ...i, done: doneIds.includes(i._id) })));
-    setLoading(false);
+    setErrorMsg("");
+    try {
+      const res = await fetch("/api/items", { cache: "no-store" });
+      const contentType = res.headers.get("content-type") || "";
+
+      if (res.redirected || contentType.includes("text/html")) {
+        router.push("/login");
+        return;
+      }
+
+      const raw = await res.text();
+      const parsed = raw ? JSON.parse(raw) : null;
+
+      if (!res.ok) {
+        const message =
+          parsed && typeof parsed === "object" && "error" in parsed
+            ? String((parsed as { error?: string }).error || "Failed to load items")
+            : `Failed to load items (${res.status})`;
+        setErrorMsg(message);
+        setItems([]);
+        return;
+      }
+
+      const data = Array.isArray(parsed) ? (parsed as Item[]) : [];
+
+      // Restore local done state from sessionStorage
+      const doneIds: string[] = JSON.parse(sessionStorage.getItem("done_ids") || "[]");
+      setItems(data.map((item: Item) => ({ ...item, done: doneIds.includes(item._id) })));
+    } catch {
+      setErrorMsg("Unable to load tasks right now.");
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   function toggleDone(id: string) {
@@ -326,16 +355,32 @@ export default function DashboardPage() {
   async function createItem() {
     if (!title.trim()) return;
     setSaving(true);
-    const res  = await fetch("/api/items", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ title, description: desc }),
-    });
-    const newItem = await res.json();
-    setItems(prev => [{ ...newItem, done: false }, ...prev]);
-    setTitle(""); setDesc("");
-    setSaving(false); setSaved(true);
-    setTimeout(() => setSaved(false), 2200);
+    setErrorMsg("");
+    try {
+      const res = await fetch("/api/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, description: desc }),
+      });
+      const raw = await res.text();
+      const parsed = raw ? JSON.parse(raw) : null;
+
+      if (!res.ok || !parsed || Array.isArray(parsed)) {
+        setErrorMsg(`Failed to create task (${res.status})`);
+        return;
+      }
+
+      const newItem = parsed as Item;
+      setItems(prev => [{ ...newItem, done: false }, ...prev]);
+      setTitle("");
+      setDesc("");
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2200);
+    } catch {
+      setErrorMsg("Unable to create task right now.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleLogout() {
@@ -485,6 +530,12 @@ export default function DashboardPage() {
 
                 {/* Tasks list card */}
                 <div className="bg-white rounded-2xl border border-[#EDE8DF] overflow-hidden shadow-sm">
+                  {errorMsg && (
+                    <div className="mx-4 mt-4 mb-1 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
+                      {errorMsg}
+                    </div>
+                  )}
+
                   {/* Filter tabs */}
                   <div className="px-4 border-b border-[#EDE8DF] flex items-center gap-1">
                     {(["all", "active", "done"] as const).map((f) => (
